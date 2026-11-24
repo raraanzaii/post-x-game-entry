@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Neon Snake — built from one prompt</title>
+<style>
+  :root { --neon: #39ff6a; --pink: #ff2ea6; --bg: #07090f; --panel: #0d1120; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: #e8ecff; min-height: 100vh;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 16px; overflow: hidden;
+    background-image: radial-gradient(ellipse 80% 55% at 50% -10%, rgba(57,255,106,.10), transparent),
+                      radial-gradient(ellipse 60% 45% at 85% 110%, rgba(255,46,166,.08), transparent);
+  }
+  h1 {
+    font-size: clamp(26px, 6vw, 42px); letter-spacing: 4px; font-weight: 800;
+    color: var(--neon); text-shadow: 0 0 8px rgba(57,255,106,.9), 0 0 28px rgba(57,255,106,.45);
+    margin-bottom: 4px;
+  }
+  .sub { color: #8b93b8; font-size: 13px; letter-spacing: 1px; margin-bottom: 14px; text-align: center; }
+  .hud {
+    display: flex; gap: 26px; margin-bottom: 12px; font-size: 15px; letter-spacing: 1px;
+  }
+  .hud b { color: #fff; font-size: 19px; margin-left: 6px; text-shadow: 0 0 10px rgba(255,255,255,.35); }
+  .hud .lab { color: #8b93b8; }
+  #wrap { position: relative; }
+  canvas {
+    background: var(--panel); display: block; border-radius: 14px;
+    box-shadow: 0 0 0 2px rgba(57,255,106,.35), 0 0 34px rgba(57,255,106,.18), inset 0 0 60px rgba(0,0,0,.55);
+    touch-action: none; max-width: 92vw; height: auto;
+  }
+  #overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; text-align: center; padding: 20px;
+    background: rgba(5,7,14,.72); border-radius: 14px; backdrop-filter: blur(2px);
+  }
+  #overlay.hidden { display: none; }
+  #overlay .big { font-size: clamp(22px, 5.4vw, 34px); font-weight: 800; letter-spacing: 2px; color: #fff;
+    text-shadow: 0 0 14px rgba(255,46,166,.65); }
+  #overlay .small { color: #aab2d5; font-size: 14px; line-height: 1.55; max-width: 340px; }
+  button {
+    background: transparent; color: var(--neon); border: 2px solid var(--neon); border-radius: 999px;
+    padding: 11px 30px; font-size: 16px; font-weight: 700; letter-spacing: 2px; cursor: pointer;
+    text-shadow: 0 0 8px rgba(57,255,106,.7); box-shadow: 0 0 16px rgba(57,255,106,.35), inset 0 0 12px rgba(57,255,106,.12);
+    transition: transform .08s ease, box-shadow .15s ease;
+  }
+  button:hover { transform: scale(1.05); box-shadow: 0 0 26px rgba(57,255,106,.55), inset 0 0 14px rgba(57,255,106,.2); }
+  .keys { margin-top: 14px; color: #69708f; font-size: 12.5px; letter-spacing: .6px; text-align: center; line-height: 1.7; }
+  .keys span { color: #aab2d5; border: 1px solid #2a3050; border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; }
+</style>
+</head>
+<body>
+  <h1>NEON SNAKE</h1>
+  <div class="sub">ONE PROMPT IN &middot; A GAME OUT &middot; BUILT BY AN AI AGENT</div>
+  <div class="hud">
+    <div><span class="lab">SCORE</span><b id="score">0</b></div>
+    <div><span class="lab">BEST</span><b id="best">0</b></div>
+    <div><span class="lab">SPEED</span><b id="speed">x1.0</b></div>
+  </div>
+  <div id="wrap">
+    <canvas id="game" width="480" height="480"></canvas>
+    <div id="overlay">
+      <div class="big" id="ovTitle">READY?</div>
+      <div class="small" id="ovText">Eat the pink orbs to grow. Every bite makes you faster. Do not bite yourself, and mind the walls.</div>
+      <button id="startBtn">START</button>
+    </div>
+  </div>
+  <div class="keys">
+    <span>&uarr;</span> <span>&darr;</span> <span>&larr;</span> <span>&rarr;</span> or <span>W</span><span>A</span><span>S</span><span>D</span> to steer &middot; <span>SPACE</span> pause &middot; swipe on touch screens
+  </div>
+<script>
+"use strict";
+
+// Neon Snake — a tiny browser game written by an AI agent from a single prompt.
+// Rules of the build: one HTML file, no libraries, no assets. Everything below
+// is hand-rolled: the loop, the rendering, the glow, the input.
+
+const COLS = 24, ROWS = 24;
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const CELL = canvas.width / COLS;
+
+const scoreEl = document.getElementById("score");
+const bestEl = document.getElementById("best");
+const speedEl = document.getElementById("speed");
+const overlay = document.getElementById("overlay");
+const ovTitle = document.getElementById("ovTitle");
+const ovText = document.getElementById("ovText");
+const startBtn = document.getElementById("startBtn");
+
+const BASE_TICK = 150;      // ms per step at speed x1.0
+const SPEED_STEP = 0.08;    // every food eaten adds this to the speed factor
+let best = Number(localStorage.getItem("neonSnakeBest") || 0);
+bestEl.textContent = best;
+
+let snake, dir, nextDir, food, score, speedFactor, tickMs;
+let running = false, paused = false, lastTime = 0, acc = 0;
+
+function reset() {
+  snake = [{ x: 11, y: 12 }, { x: 10, y: 12 }, { x: 9, y: 12 }];
+  dir = { x: 1, y: 0 };
+  nextDir = dir;
+  score = 0;
+  speedFactor = 1.0;
+  tickMs = BASE_TICK;
+  placeFood();
+  syncHud();
+}
+
+function placeFood() {
+  while (true) {
+    const f = { x: (Math.random() * COLS) | 0, y: (Math.random() * ROWS) | 0 };
+    if (!snake.some(s => s.x === f.x && s.y === f.y)) { food = f; return; }
+  }
+}
+
+function syncHud() {
+  scoreEl.textContent = score;
+  bestEl.textContent = best;
+  speedEl.textContent = "x" + speedFactor.toFixed(1);
+}
+
+function step() {
+  dir = nextDir;
+  const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+  const hitsWall = head.x < 0 || head.y < 0 || head.x >= COLS || head.y >= ROWS;
+  const hitsSelf = snake.some(s => s.x === head.x && s.y === head.y);
+  if (hitsWall || hitsSelf) return gameOver();
+  snake.unshift(head);
+  if (head.x === food.x && head.y === food.y) {
+    score += 10;
+    speedFactor += SPEED_STEP;              // the brief: speed up on every bite
+    tickMs = BASE_TICK / speedFactor;
+    if (score > best) { best = score; localStorage.setItem("neonSnakeBest", String(best)); }
+    placeFood();
+  } else {
+    snake.pop();
+  }
+  syncHud();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // faint grid
+  ctx.strokeStyle = "rgba(120,140,255,0.055)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 1; i < COLS; i++) { ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, canvas.height); }
+  for (let i = 1; i < ROWS; i++) { ctx.moveTo(0, i * CELL); ctx.lineTo(canvas.width, i * CELL); }
+  ctx.stroke();
+  // food: a pulsing pink orb
+  const pulse = 1 + 0.14 * Math.sin(performance.now() / 160);
+  ctx.save();
+  ctx.shadowColor = "#ff2ea6"; ctx.shadowBlur = 18;
+  ctx.fillStyle = "#ff2ea6";
+  ctx.beginPath();
+  ctx.arc(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, (CELL / 2 - 3) * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // snake: neon segments, head brightest
+  for (let i = snake.length - 1; i >= 0; i--) {
+    const s = snake[i];
+    const t = snake.length <= 1 ? 0 : i / (snake.length - 1);
+    const g = Math.round(255 - 120 * t), b = Math.round(106 + 60 * t);
+    ctx.save();
+    ctx.shadowColor = "#39ff6a"; ctx.shadowBlur = i === 0 ? 20 : 12;
+    ctx.fillStyle = "rgb(57," + g + "," + b + ")";
+    const pad = i === 0 ? 1.5 : 2.5;
+    ctx.beginPath();
+    ctx.roundRect(s.x * CELL + pad, s.y * CELL + pad, CELL - pad * 2, CELL - pad * 2, 6);
+    ctx.fill();
+    ctx.restore();
+    if (i === 0) { // eyes, offset toward the direction of travel
+      ctx.fillStyle = "#04150a";
+      const cx = s.x * CELL + CELL / 2, cy = s.y * CELL + CELL / 2;
+      const ex = dir.x * 3.5, ey = dir.y * 3.5, px = dir.y * 4.5, py = dir.x * 4.5;
+      ctx.beginPath();
+      ctx.arc(cx + ex + px, cy + ey + py, 2.4, 0, Math.PI * 2);
+      ctx.arc(cx + ex - px, cy + ey - py, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function loop(ts) {
+  if (!running) return;
+  requestAnimationFrame(loop);
+  if (paused) return;
+  acc += ts - lastTime;
+  lastTime = ts;
+  while (acc >= tickMs) { acc -= tickMs; step(); if (!running) return; }
+  draw();
+}
+
+function startGame() {
+  reset();
+  running = true; paused = false;
+  overlay.classList.add("hidden");
+  lastTime = performance.now(); acc = 0;
+  requestAnimationFrame(loop);
+}
+
+function gameOver() {
+  running = false;
+  ovTitle.textContent = "GAME OVER";
+  ovText.textContent = "Score " + score + " · best " + best + " · top speed x" + speedFactor.toFixed(1) + ". One more run?";
+  startBtn.textContent = "PLAY AGAIN";
+  overlay.classList.remove("hidden");
+}
+
+function togglePause() {
+  if (!running) return;
+  paused = !paused;
+  if (paused) {
+    ovTitle.textContent = "PAUSED";
+    ovText.textContent = "Press SPACE or tap resume.";
+    startBtn.textContent = "RESUME";
+    overlay.classList.remove("hidden");
+  } else {
+    overlay.classList.add("hidden");
+    lastTime = performance.now();
+  }
+}
+
+startBtn.addEventListener("click", () => { if (paused) togglePause(); else startGame(); });
+
+const DIRS = {
+  ArrowUp: { x: 0, y: -1 }, KeyW: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 }, KeyS: { x: 0, y: 1 },
+  ArrowLeft: { x: -1, y: 0 }, KeyA: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 }, KeyD: { x: 1, y: 0 }
+};
+addEventListener("keydown", (e) => {
+  if (e.code === "Space") { e.preventDefault(); if (running) togglePause(); else startGame(); return; }
+  const d = DIRS[e.code];
+  if (!d) return;
+  e.preventDefault();
+  if (d.x === -dir.x && d.y === -dir.y) return;   // no 180-degree turns
+  nextDir = d;
+});
+
+let touchStart = null;
+canvas.addEventListener("touchstart", (e) => {
+  touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+}, { passive: true });
+canvas.addEventListener("touchend", (e) => {
+  if (!touchStart) return;
+  const dx = e.changedTouches[0].clientX - touchStart.x;
+  const dy = e.changedTouches[0].clientY - touchStart.y;
+  touchStart = null;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+  const d = Math.abs(dx) > Math.abs(dy) ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) };
+  if (d.x === -dir.x && d.y === -dir.y) return;
+  nextDir = d;
+}, { passive: true });
+
+reset();
+draw();
+</script>
+</body>
+</html>
